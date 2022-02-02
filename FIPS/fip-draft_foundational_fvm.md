@@ -158,6 +158,11 @@ this reason, this spec combines two styles to provide a well-rounded picture:
   interfaces, and types, without mandating concrete technical choices yet.
   _Conveyed by future tense and/or speculative language._
 
+### Reference implementation
+
+[filecoin-project/ref-fvm] is a reference implementation to serve as a companion
+to this specification.
+
 ### Architectural overview
 
 This diagram provides a high-level architectural overview.
@@ -235,20 +240,16 @@ instructions], floating number values and operations, and [threads] to prevent
 ### Responsibilities
 
 The FVM applies messages to the state tree. It is not responsible for advancing
-the chain itself. Concretely, it is responsible for:
+the chain itself. Concretely, it is mainly responsible for:
 
-- Loading the code of invoked actors, turning them into WASM modules, and
-  optimizing the process through compilation and caching.
-- Setting up the object stack, including the Call Manager, Invocation
-  Containers, Kernels, and more. This includes setting up the WASM runtime, its
-  configuration, binding syscalls as host-provided functions, passing
-  parameters, handling result values, managing aborts.
-- Serving as a call orchestration layer across actors, through the Call Manager
-  abstraction.
-- Handling syscalls from actors.
-- Interacting with the outer environment (Filecoin client) when necessary.
-- Managing IPLD state I/O. Potentially tracking object lifetime to cooperate
-  with state tree garbage collection.
+- Loading on-chain WASM modules and compiling them to machine code.
+- Performing preflight checks on the supplied messages.
+- Instantiating the object stack described in the [core technical
+  design](#core-technical-design) to apply messages.
+- Routing calls across actors, via the Call Manager abstraction.
+- Processing syscalls from actors, and delivering the results.
+- Interfacing with the outer environment (Filecoin client) when necessary.
+- Managing IPLD state read and write operations.
 
 ### Core technical design
 
@@ -263,7 +264,8 @@ state root, ready to take in messages for execution as explained above.
 
 #### Call Manager
 
-The Call Manager coordinates the call stack involved in processing a given message.
+The Call Manager coordinates the call stack involved in processing a given
+message. This entails setting up and destroying Invocation Containers.
 
 #### Invocation Container
 
@@ -295,14 +297,15 @@ more performant to implement in native land (e.g. cryptographic primitives).
 #### Kernel
 
 The Kernel is an object created by the Call Manager and injected into the
-Invocation Container. It processes syscalls, and stores state concerning the
-invocation.
+Invocation Container. It processes syscalls, and stores invocation-scoped state.
 
 #### Externs
 
 Similar to syscalls being functions provided to the actor by the FVM, Externs
-are functions provided by the node to the FVM. Depending on the programming
-languages at play, Externs may need to traverse an FFI boundary.
+are functions provided by the node to the FVM. They are a logical layer that may
+or may not have a physical impact, depending on the programming languages at
+play. If the FVM and node languages differ, it's possible that the Externs layer
+translates aligns with an FFI boundary.
 
 ### Actors
 
@@ -430,26 +433,27 @@ pub struct ActorState {
 #### Actor deployment
 
 The current `InitActor` (`f00`) will be extended with a (`InstallActor`) method
-taking two input parameters:
+taking a single input parameter: the actor's WASM bytecode. As mentioned above,
+DAG representation format is to be defined. The actor's WASM bytecode must
+specify the version of the Invocation Container the bytecode requires, inside a
+reserved exported global.
 
-1. The actor's WASM bytecode as an input parameter.
-2. The invocation container version.
+The state object of the `InitActor` will be extended with an `ActorRegistry`
+HAMT of `CID => ActorSpec`, where `ActorSpec` is:
 
-The state of `InitActor` will be augmented with an `ActorRegistry` HAMT of `CID
-=> ActorSpec`, where `ActorSpec` is:
-
-```
-/// A simple actor specification/metadata structure, to be extended in the future.
+```rust
+/// A simple actor specification/metadata structure, to be extended with
+/// additional metadata in the future.
 struct ActorSpec {
   /// The version of the invocation container.
   version: int, 
 }
 ```
 
-The logic of `InitActor#LoadActor` is as follows:
+The logic of `InitActor#LoadActor` is as follows.
 
 1. Validate the WASM bytecode.
-    - Syntax validation and structural validation, [as per standard](https://webassembly.github.io/spec/core/valid/index.html).
+    - Perform syntax validation and structural validation, [as per standard](https://webassembly.github.io/spec/core/valid/index.html).
     - No floating point instructions.
 2. Multihash the bytecode and calculate the code CID.
 3. Check if the code CID is already registered in the `ActorRegistry`.
@@ -459,10 +463,11 @@ The logic of `InitActor#LoadActor` is as follows:
 6. Return the CID, and charge the cost of the above operations, and potentially
    a price for rent/storage.
 
-At this point, the actor will be ready to be instantiated through the standard
-`InitActor#Exec`. Any params provided will be passed through to the actor's
-constructor (method number = 0). This includes source depoyable byte streams
-(EVM bytecode) for foreign actors.
+At this point, the actor can be instantiated many times through the standard
+`InitActor#Exec` method. Parameters provided will be passed through to the
+actor's constructor (currently identified by `method_number=1`). This includes
+byte streams corresponding to deployables for foreign actors (e.g. EVM
+bytecode).
 
 #### Actor message dispatch
 
@@ -507,14 +512,20 @@ actors continue relying on _method number_, but now perform internal dispatch.
 This section specifies all the syscalls that the IC must make available to the
 actor.
 
-Currently, the FVM charges no gas for import linkage. In the future, the FVM may charge a static or a dynamic cost for performing the linkage of the concrete functions or namespaces imported by the module.
+Currently, the FVM charges no gas for import linkage. In the future, the FVM may
+charge a static or a dynamic cost for linking the concrete functions or
+namespaces imported by the module.
 
 **Interface type conventions**
 
-- `off` and `len` refer to "memory offset" and "buffer length". Together, they
-  define the bounds of a slice of memory.
-- 
-- The `Result` return type 
+- `off` and `len` in argument names refers to "memory offset" and "buffer
+  length". Together, they define the bounds of a slice of memory.
+- Syscall arguments prefixed with `o_` represent output parameters.
+- The `Result` return type carries a **syscall error number** and the specified
+  payload type. The latter only appears when the syscall succeeded (with error
+  number `0`).  These error numbers are ephemeral, and have no meaning beyond
+  the FVM syscall boundary. Refer to the [FVM Error Conditions] document for
+  more info.
 
 #### Namespace: `actor`
 
@@ -529,19 +540,19 @@ pub fn resolve_address(
 pub fn get_actor_code_cid(
     addr_off: *const u8,
     addr_len: u32,
-    obuf_off: *mut u8,
-    obuf_len: u32,
+    o_cid_off: *mut u8,
+    o_cid_len: u32,
 ) -> Result<i32>;
 
 /// Generates a new actor address for an actor deployed
 /// by the calling actor.
-pub fn new_actor_address(obuf_off: *mut u8, obuf_len: u32) -> Result<u32>;
+pub fn new_actor_address(o_addr_off: *mut u8, o_addr_len: u32) -> Result<u32>;
 
 /// Creates a new actor of the specified type in the state tree, under
 /// the provided address.
 ///
-/// NOTE: This syscall is only provisonal; it must be removed when
-/// programmability is enabled.
+/// NOTE: This syscall with these input parameters is provisional.
+/// It is unsafe in an untrusted environment.
 pub fn create_actor(actor_id: u64, typ_off: *const u8) -> Result<()>;
 
 #[repr(C)]
@@ -581,8 +592,8 @@ pub fn compute_unsealed_sector_cid(
     proof_type: i64,
     pieces_off: *const u8,
     pieces_len: u32,
-    cid_off: *mut u8,
-    cid_len: u32,
+    o_cid_off: *mut u8,
+    o_cid_len: u32,
 ) -> Result<u32>;
 
 /// Verifies a sector seal proof.
@@ -641,9 +652,9 @@ pub fn open(cid: *const u8) -> Result<IpldOpen>;
 /// set. The new block isn't added to the reachable set until the CID is computed.
 pub fn create(codec: u64, data: *const u8, len: u32) -> Result<u32>;
 
-/// Reads the identified block into obuf, starting at offset, reading _at most_ len bytes.
+/// Reads the identified block into o_buf, starting at offset, reading _at most_ len bytes.
 /// Returns the number of bytes read.
-pub fn read(id: u32, offset: u32, obuf: *mut u8, max_len: u32) -> Result<u32>;
+pub fn read(id: u32, offset: u32, o_buf_off: *mut u8, o_buf_len: u32) -> Result<u32>;
 
 /// Returns the codec and size of the specified block.
 pub fn stat(id: u32) -> Result<IpldStat>;
@@ -657,8 +668,8 @@ pub fn cid(
     id: u32,
     hash_fun: u64,
     hash_len: u32,
-    cid: *mut u8,
-    cid_max_len: u32,
+    o_cid_off: *mut u8,
+    o_cid_len: u32,
 ) -> Result<u32>;
 
 #[repr(C)]
@@ -721,8 +732,8 @@ pub fn total_fil_circ_supply() -> Result<TokenAmount>;
 pub fn get_chain_randomness(
     dst: i64,
     round: i64,
-    entropy_offset: *const u8,
-    entropy_len: u32,
+    o_entropy_off: *const u8,
+    o_entropy_len: u32,
 ) -> Result<[u8; 32]>;
 
 /// Gets 32 bytes of randomness from the beacon system (currently Drand).
@@ -732,8 +743,8 @@ pub fn get_chain_randomness(
 pub fn get_beacon_randomness(
     dst: i64,
     round: i64,
-    entropy_offset: *const u8,
-    entropy_len: u32,
+    o_entropy_off: *const u8,
+    o_entropy_len: u32,
 ) -> Result<[u8; 32]>;
 ```
 
@@ -765,7 +776,7 @@ pub struct Send {
 ///
 /// If the CID doesn't fit in the specified maximum length (and/or the length is 0), this
 /// function returns the required size and does not update the cid buffer.
-pub fn root(cid: *mut u8, cid_max_len: u32) -> Result<u32>;
+pub fn root(o_cid_off: *mut u8, o_cid_len: u32) -> Result<u32>;
 
 /// Sets the root CID for the calling actor. The new root must be in the reachable set.
 pub fn set_root(cid: *const u8) -> Result<()>;
@@ -811,23 +822,9 @@ pub trait Rand {
         entropy: &[u8],
     ) -> Result<[u8; 32]>;
 
-    fn get_chain_randomness_looking_forward(
-        &self,
-        pers: DomainSeparationTag,
-        round: ChainEpoch,
-        entropy: &[u8],
-    ) -> Result<[u8; 32]>;
-
     /// Gets 32 bytes of randomness for ChainRand paramaterized by the DomainSeparationTag,
     /// ChainEpoch, Entropy from the latest beacon entry.
     fn get_beacon_randomness(
-        &self,
-        pers: DomainSeparationTag,
-        round: ChainEpoch,
-        entropy: &[u8],
-    ) -> Result<[u8; 32]>;
-
-    fn get_beacon_randomness_looking_forward(
         &self,
         pers: DomainSeparationTag,
         round: ChainEpoch,
@@ -857,20 +854,6 @@ and mutating entries in objects like HAMTs and AMT results in multiple
 sequential state IO operations, each of which traverses the Extern boundary in a
 non-parallelizable way. If the Extern is traversed through FFI, the cost of
 operating on ADLs may be non-negligible.
-
-### Error conditions
-
-There are two constructs in the FVM to signal results:
-
-- **Exit codes:** signal the outcome of the execution of an actor. They can be
-  emitted by the actor or the runtime, and they're recorded on-chain inside the
-  receipt.
-- **Syscall error numbers:** signal the outcome of a single syscall. They are
-  ephemeral, and have no meaning beyond the FVM syscall boundary.
-
-In both cases, a `0` value implies success. For more information, refer to the
-[FVM Error Conditions] specification (commit `724650` at the time of writing
-this FIP).
 
 ### Memory policy
 
