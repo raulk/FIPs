@@ -598,16 +598,29 @@ pub fn compute_unsealed_sector_cid(
 ) -> Result<u32>;
 
 /// Verifies a sector seal proof.
+///
+/// It takes the buffer offset and length containing a CBOR-encoded
+/// SealVerifyInfo struct, to serve as input. A return payload of 0
+/// means verification success; any other value means verification
+/// failure.
 pub fn verify_seal(info_off: *const u8, info_len: u32) -> Result<i32>;
 
 /// Verifies a window proof of spacetime.
+///
+/// It takes the buffer offset and length containing a CBOR-encoded
+/// WindowPoStVerifyInfo struct, to serve as input. A return payload
+/// of 0 means verification success; any other value means verification
+/// failure.
 pub fn verify_post(info_off: *const u8, info_len: u32) -> Result<i32>;
 
 /// Verifies that two block headers provide proof of a consensus fault.
 ///
-/// Returns a 0 status if a consensus fault was recognized, along with the
-/// BlockId containing the fault details. Otherwise, a -1 status is returned,
-/// and the second result parameter must be ignored.
+/// A syscall success implies that the logic ran successfully, but it
+/// does not imply that a fault was detected. The caller must inspect the
+/// return payload. If the fault field equals 0, a consensus fault was
+/// recognized at the specified epoch, incurred by the specified actor.
+/// Otherwise, no consensus fault was recognized, and the remaining fields
+/// must be ignored.
 pub fn verify_consensus_fault(
     h1_off: *const u8,
     h1_len: u32,
@@ -618,23 +631,36 @@ pub fn verify_consensus_fault(
 ) -> Result<VerifyConsensusFault>;
 
 /// Verifies an aggregated batch of sector seal proofs.
+///
+/// It takes the buffer offset and length containing a CBOR-encoded
+/// AggregateSealVerifyProofAndInfos struct, to serve as input.
+/// A return payload of 0 means verification success; any other value
+/// means verification failure.
 pub fn verify_aggregate_seals(agg_off: *const u8, agg_len: u32) -> Result<i32>;
 
-/// Verifies an aggregated batch of sector seal proofs.
-pub fn batch_verify_seals(batch_off: *const u8, batch_len: u32, result_off: *const u8) -> Result<()>;
+/// Batch verifies many sector seal proofs within a single syscall.
+///
+/// It takes the buffer offset and length containing a CBOR-encoded
+/// list of SealVerifyInfo structs, to serve as input.
+///
+/// The return payload is an array of results in the same order as the
+/// input sector seal proofs. A value 0 in index i means that proof[i] was
+/// verified successfully. Non-zero values denote verification failure.
+pub fn batch_verify_seals(batch_off: *const u8, batch_len: u32, o_result_off: *const u8) -> Result<()>;
 
 #[repr(C)]
 pub struct VerifyConsensusFault {
     pub fault: u32,
-    pub epoch: fvm_shared::clock::ChainEpoch,
-    pub actor: fvm_shared::ActorID,
+    pub epoch: ChainEpoch,
+    pub actor: ActorID,
 }
 ```
 
 #### Namespace: `gas`
 
 ```rust
-/// Charge gas.
+/// Charge the specified amount of gas for the supplied operation name,
+/// encoded as an UTF-8 string.
 pub fn charge(name_off: *const u8, name_len: u32, amount: u64) -> Result<()>;
 ```
 
