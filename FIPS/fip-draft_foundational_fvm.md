@@ -773,7 +773,7 @@ pub struct Send {
 #### Namespace: `self`
 
 ```rust
-/// Gets the current root for the calling actor.
+/// Gets the current state root for the calling actor.
 ///
 /// If the CID doesn't fit in the specified maximum length (and/or the length is 0), this
 /// function returns the required size and does not update the cid buffer.
