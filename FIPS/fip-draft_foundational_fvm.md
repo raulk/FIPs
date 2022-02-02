@@ -75,12 +75,12 @@ replaces: N/A
 User-programmability is the ability to deploy and run arbitrary user-provided
 code on some infrastructure, in this case a blockchain network.
 
-Today, the Filecoin blockchain lacks user-programmability. This FIP is part of a
-series that aims to introduce this capability.
+Today, the Filecoin blockchain lacks on-chain user-programmability. This FIP is
+part of a series that aims to introduce this capability.
 
 A change of this magnitude impacts many components. Concretely:
 
-1. The storage layer, to store and load user-provided code.
+1. The chain state layer, to store and load user-provided code.
 2. The execution layer, to compile/interpret user-provided code, run state
    transitions involving such code, and verify the results.
 3. The gas model, to secure the network and modulate chain capacity
@@ -91,14 +91,11 @@ A change of this magnitude impacts many components. Concretely:
 This FIP focuses on (1) and (2). The remaining points are out of scope of this
 FIP, and will be addressed by subsequent proposals.
 
-Moreover, this FIP proposes a network upgrade to introduce a foundational
-version of the FVM.
-
 ## Abstract
 
 We specify the Filecoin Virtual Machine (FVM), a IPLD-ready WASM-based execution
 layer capable of running arbitrary user-provided code. The FVM replaces the
-existing execution layer.
+[existing non-programmable execution layer][existing non-programmable VM].
 
 The logic of native actors (the equivalent of smart contracts in Filecoin) is
 deployed as WASM bytecode. Foreign actors targeting non-Filecoin runtimes such
@@ -110,16 +107,16 @@ components: (a) Machine, (b) Call Manager, (c) Invocation Container, (d) Kernel,
 adhere to, the catalogue of available syscalls, the mechanics of state
 manipulation, the error conditions, and more technical details.
 
-In this FIP, we propose a network upgrade involving two major changes: (1) the
-introduction of a non-programmable version of the FVM to pave the way, and (2)
-gas model changes. The latter is not specified herein, and is object of an
-upcoming companion FIP.
+This FIP introduces the technical foundations of the FVM. It will be accompanied
+by two subsequent FIPs. They will respectively propose: (1) an atomic switch
+from the current VM to a non-programmable version of the FVM, and (2) a new gas
+model adequate for on-chain user-programmability.
 
 ## Change Motivation
 
-The desire for user-programmability in Filecoin is well-recognized and
-uncontested. It is the key to unlock enormous latent potential, as it enables
-permissionless community-driven innovation on the Filecoin network.
+The desire for user-programmability in Filecoin is pronounced and
+well-recognized. It is the key to unlock enormous latent potential, as it
+enables permissionless community-driven innovation on the Filecoin network.
 
 Some of the envisioned benefits include:
 
@@ -181,6 +178,7 @@ transactions are encapsulated in messages. There are two kinds of messages:
 A VM is instantiated with these input parameters:
 
 ```rust
+/// These code samples are simplified with respect to the actual implementation in ref-fvm.
 let machine = Machine::new(
     epoch,             // chain epoch at which to execute messages
     base_fee,          // base fee currently in effect
@@ -230,13 +228,14 @@ The chosen WASM architecture is variant is 32-bits, and not 64-bit. Reasons incl
 - 4GiB addressable memory not deemed limiting for blockchain use cases
 - No loss of function: 64-bit integer types and operations are supported
 
-The FVM requires [multi-value support]. It explicitly forbids [SIMD
+The FVM requires [multi-value support]. It currently forbids [SIMD
 instructions], floating number values and operations, and [threads] to prevent
-[Nondeterministic] behavior.
+[Nondeterministic] behavior. However, these requirements may vary in the future.
 
 ### Responsibilities
 
-The FVM is responsible for these tasks:
+The FVM applies messages to the state tree. It is not responsible for advancing
+the chain itself. Concretely, it is responsible for:
 
 - Loading the code of invoked actors, turning them into WASM modules, and
   optimizing the process through compilation and caching.
@@ -307,8 +306,8 @@ languages at play, Externs may need to traverse an FFI boundary.
 
 ### Actors
 
-The term _Actor_ is a reference to the [actor model], a concurrent computation
-paradigm that inspires Filecoin's programming and scalability philosophies.
+Actors are equivalent to smart contracts in other networks: they are pieces of
+logic that live on-chain and can be triggered via messages.
 
 #### Actor types
 
@@ -333,9 +332,19 @@ Filecoin clients can rely on a single codebase for built-in actors. This speeds
 up protocol development, shortens protocol upgrade timelines, and reduces
 coordination overhead.
 
-This FIP proposes to promote the FVM built-in actors codebase (forked from the
-Forest client), to the status of **_canonical_ built-in actors**. Clients should
-adopt this codebase, but they may choose to pursue their own.
+This FIP proposes to promote the [FVM built-in actors] codebase to the status of
+**_canonical_ built-in actors**. These actors were forked from the Forest
+client, and they currently live in the [filecoin-project/ref-fvm] repo. There
+are plans to extract them to a standalone repo.
+
+This decision would have a few practical implications:
+
+1. The canonical actors would become a common-good codebase for the Filecoin
+   network, with all implementors collaborating around it.
+2. Implementations would embed the canonical WASM bytecode into their
+   binaries. The concrete mechanismsm are implementation-dependent.
+3. Network upgrades would agree on the exact CodeCIDs of built-in actors to
+   enable at a fork.
 
 ##### Native actors
 
@@ -346,8 +355,8 @@ WASM. However, language-specific overheads (e.g. runtime, garbage collection,
 stdlibs, etc.) may lead to oversized WASM bytecode and execution overheads,
 translating to higher gas costs.
 
-Furthermore, there may be hard limits enforced on the sizing of bytecode
-deployables in the future.
+Furthermore, there will likely be hard limits enforced on the sizing of bytecode
+deployables before user deployable actors are allowed.
 
 There's a [reference SDK] written in
 Rust to accompany this FIP. It is used by the canonical built-in actors.
@@ -831,15 +840,13 @@ pub trait Rand {
 ### IPLD memory model
 
 IPLD is the data model of Filecoin. Actors can be construed as logic that
-receives an input IPLD graph, performs computation, and (optionally) mutates the
-IPLD graph by saving an alternative root in the actor's state.
+receives an input IPLD graph, performs computation, and returns a new IPLD graph
+(which is persisted by saving the root CID of the new graph in the actor's
+state).
 
 All state will be stored and retrieved as IPLD. The state store lives on the
 node side, and it is exposed to the FVM via an Extern. This is important as the
 VM itself needs to understand the IPLD so we can do garbage collection, etc.
-
-IPLD codecs will be defined as WASM libraries, imported through the WASM import
-system. Ideally, ADLs and selectors would be implemented in the same way.
 
 The FVM must guarantee that actors can only access data that is in their state
 tree. This is done through the maintenance of an "accessible set" inside the
@@ -850,9 +857,6 @@ and mutating entries in objects like HAMTs and AMT results in multiple
 sequential state IO operations, each of which traverses the Extern boundary in a
 non-parallelizable way. If the Extern is traversed through FFI, the cost of
 operating on ADLs may be non-negligible.
-
-Alternative strategies like moving ownership of the state store to the FVM-side,
-or leveraging selectors for queries, may be explored in the future.
 
 ### Error conditions
 
@@ -1008,3 +1012,6 @@ Copyright and related rights waived via [CC0](https://creativecommons.org/public
 [EVM <> FVM binding specification]: https://github.com/filecoin-project/fvm-project/blob/main/04-evm-mapping.md
 [FVM Error Conditions]: https://github.com/filecoin-project/fvm-specs/blob/main/07-errors.md
 [filecoin-project/ref-fvm]: https://github.com/filecoin-project/ref-fvm
+[specs-actors]: https://github.com/filecoin-project/specs-actors
+[existing non-programmable VM]: https://spec.filecoin.io/intro/filecoin_vm/
+[FVM built-in actors]: https://github.com/filecoin-project/ref-fvm/tree/master/actors
