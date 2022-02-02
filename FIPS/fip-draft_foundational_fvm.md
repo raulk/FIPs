@@ -1,6 +1,6 @@
 ---
 fip: <to be assigned>
-title: Filecoin Virtual Machine
+title: Introducing the Filecoin Virtual Machine (FVM)
 authors: Raúl Kripalani (@raulk), Steven Allen (@stebalien)
 discussions-to: <URL>
 status: Draft
@@ -9,12 +9,11 @@ category (*only required for Standard Track): Core
 created: 2022-01-26
 spec-sections: 
   - TBD
-  - 
 requires: N/A
 replaces: N/A
 ---
 
-# The Filecoin Virtual Machine
+# Introducing the Filecoin Virtual Machine (FVM)
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
@@ -24,6 +23,7 @@ replaces: N/A
 - [Abstract](#abstract)
 - [Change Motivation](#change-motivation)
 - [FVM specification](#fvm-specification)
+  - [Reference implementation](#reference-implementation)
   - [Architectural overview](#architectural-overview)
   - [Context and VM interface](#context-and-vm-interface)
   - [Technology](#technology)
@@ -37,6 +37,9 @@ replaces: N/A
     - [Externs](#externs)
   - [Actors](#actors)
     - [Actor types](#actor-types)
+      - [Built-in actors](#built-in-actors)
+      - [Native actors](#native-actors)
+      - [Foreign actors](#foreign-actors)
     - [Actor bytecode representation](#actor-bytecode-representation)
     - [Actor deployment](#actor-deployment)
     - [Actor message dispatch](#actor-message-dispatch)
@@ -53,12 +56,9 @@ replaces: N/A
     - [Namespace: `vm`](#namespace-vm)
   - [Externs](#externs-1)
   - [IPLD memory model](#ipld-memory-model)
-  - [Error conditions](#error-conditions)
-  - [Memory policy](#memory-policy)
   - [Module caching](#module-caching)
   - [Gas charging](#gas-charging)
   - [Specific actor coupling](#specific-actor-coupling)
-- [Foundational FVM network upgrade](#foundational-fvm-network-upgrade)
 - [Design Rationale](#design-rationale)
 - [Backwards Compatibility](#backwards-compatibility)
 - [Test Cases](#test-cases)
@@ -93,19 +93,19 @@ FIP, and will be addressed by subsequent proposals.
 
 ## Abstract
 
-We specify the Filecoin Virtual Machine (FVM), a IPLD-ready WASM-based execution
+We specify the Filecoin Virtual Machine (FVM), a IPLD-ready Wasm-based execution
 layer capable of running arbitrary user-provided code. The FVM replaces the
 [existing non-programmable execution layer][existing non-programmable VM].
 
 The logic of native actors (the equivalent of smart contracts in Filecoin) is
-deployed as WASM bytecode. Foreign actors targeting non-Filecoin runtimes such
+deployed as Wasm bytecode. Foreign actors targeting non-Filecoin runtimes such
 as the Ethereum Virtual Machine are also supported through runtime emulation.
 
 We provide a reference architecture for the FVM, and explain its various
 components: (a) Machine, (b) Call Manager, (c) Invocation Container, (d) Kernel,
 (e) Syscalls, and (f) Externs. We define the contract that actor code must
-adhere to, the catalogue of available syscalls, the mechanics of state
-manipulation, the error conditions, and more technical details.
+adhere to, the catalogue of available syscalls, the mechanics of IPLD state
+manipulation, and further technical details
 
 This FIP introduces the technical foundations of the FVM. It will be accompanied
 by two subsequent FIPs. They will respectively propose: (1) an atomic switch
@@ -135,10 +135,11 @@ Some of the envisioned benefits include:
   of richer, composite, interconnected solutions.
 - Unification of built-in actors across implementations to speed up protocol
   development.
-- Enabling automatic/governance-driven protocol upgrades.
-- Potential for more areas of the Filecoin protocol to migrate to WASM space
+- Ability to conduct protocol upgrades that modify built-in actor logic through
+  on-chain governance processes.
+- Potential for more areas of the Filecoin protocol to migrate to Wasm space
   (e.g. block validation, fork choice rule, etc.), it becomes possible to deploy
-  protocol changes as WASM modules to all clients, conditional upon on-chain
+  protocol changes as Wasm modules to all clients, conditional upon on-chain
   voting.
 
 ## FVM specification
@@ -224,24 +225,24 @@ implementations may opt to deviate from it.
 
 ### Technology
 
-The proposed FVM execution runtime is [WebAssembly (WASM)] with 32-bit memories.
+The proposed FVM execution runtime is [WebAssembly (Wasm)] with 32-bit memories.
 64-bit memories are still under development in the [memory64] extension.
 
-WASM with 32-bit memories supports 64-bit integer types and arithmetic, it just
+Wasm with 32-bit memories supports 64-bit integer types and arithmetic, it just
 can't address memory beyond 4GiB. This size is deemed sufficient for blockchain
 state transition use cases, but may be limiting for future and more generalised
 applications of the FVM.
 
 The FVM requires [multi-value support]. It currently forbids [SIMD
 instructions], floating number values and operations, and [threads] to prevent
-[Nondeterministic] behavior. However, these constraints may vary in the future.
+[Nondeterministic][Nondeterminism] behavior. However, these constraints may vary in the future.
 
 ### Responsibilities
 
 The FVM applies messages to the state tree. It is not responsible for advancing
 the chain itself. Concretely, it is mainly responsible for:
 
-- Loading on-chain WASM modules and compiling them to machine code.
+- Loading on-chain Wasm modules and compiling them to machine code.
 - Performing preflight checks on the supplied messages.
 - Instantiating the object stack described in the [core technical
   design](#core-technical-design) to apply messages.
@@ -272,14 +273,14 @@ The Invocation Container (IC) is the environment/sandbox that runs actor code
 within the context of a single invocation. That is, reentrancy or recursion on
 the same actor will spin off another IC.
 
-The IC is an instance of a WASM engine/runtime fulfilling the FVM-side of the
+The IC is an instance of a Wasm engine/runtime fulfilling the FVM-side of the
 contract. The contract consists of:
 
 1. Syscalls available as importable host-provided functions.
 2. Shared types to represent data across the FVM boundary.
 3. Actor-owned memory to exchange data in syscalls.
 4. Transparent gas accounting and automatic execution halting.
-5. (Future) Dynamic linkage of popular WASM modules "blessed" by the community
+5. (Future) Dynamic linkage of popular Wasm modules "blessed" by the community
    through some governance process, in order to reduce actor bytecode size (e.g.
    FVM SDKs, IPLD codecs, etc).
 
@@ -289,7 +290,7 @@ for deprecating IC versions over time has not been yet determined.
 
 #### Syscalls
 
-Syscalls are functions made available to the actor as WASM imports, allowing it
+Syscalls are functions made available to the actor as Wasm imports, allowing it
 to interact with the outer environment, and to call complex operations that are
 more performant to implement in native land (e.g. cryptographic primitives).
 
@@ -323,7 +324,7 @@ We distinguish three types of actors:
 
 ##### Built-in actors
 
-Built-in actors are protocol-defined actors whose WASM bytecode ships with the
+Built-in actors are protocol-defined actors whose Wasm bytecode ships with the
 Filecoin client. The recommended approach is to embed a CAR bundle with all the
 relevant bytecode, and seeding the blockstore with it on node start.
 
@@ -343,7 +344,7 @@ This decision would have a few practical implications:
 
 1. The canonical actors would become a common-good codebase for the Filecoin
    network, with all implementors collaborating around it.
-2. Implementations would embed the canonical WASM bytecode into their
+2. Implementations would embed the canonical Wasm bytecode into their
    binaries. The concrete mechanismsm are implementation-dependent.
 3. Network upgrades would agree on the exact CodeCIDs of built-in actors to
    enable at a fork.
@@ -353,19 +354,19 @@ This decision would have a few practical implications:
 Native actors are user-defined actors targeting the native FVM runtime.
 
 Users can _technically_ write native actors in any programming that compiles to
-WASM. However, language-specific overheads (e.g. runtime, garbage collection,
-stdlibs, etc.) may lead to oversized WASM bytecode and execution overheads,
+Wasm. However, language-specific overheads (e.g. runtime, garbage collection,
+stdlibs, etc.) may lead to oversized Wasm bytecode and execution overheads,
 translating to higher gas costs.
 
 Furthermore, there will likely be hard limits enforced on the sizing of bytecode
 deployables before user deployable actors are allowed.
 
-There's a [reference SDK] written in
-Rust to accompany this FIP. It is used by the canonical built-in actors.
+There's a [reference SDK] written in Rust to accompany this FIP. As of today, it
+is used by the canonical built-in actors.
 
 We find that Rust is a reasonable choice to writing native actors due to the
 lack of a runtime, the ability to elide the stdlib through `no_std`, and its
-mature WASM support.
+mature Wasm support.
 
 Exploration of other languages is something we encourage the community to
 pursue. Concretely, we believe that AssemblyScript, Swift, Kotlin, and TinyGo
@@ -407,7 +408,7 @@ fidelity/parity, and makes it tooling reuse possible.
 
 #### Actor bytecode representation
 
-WASM bytecode payloads will be represented as an IPLD DAG, and will be stored in
+Wasm bytecode payloads will be represented as an IPLD DAG, and will be stored in
 the state blockstore, owned by the node implementation.
 
 **The concrete DAG layout, multihash function, and CID codec are yet to be
@@ -432,8 +433,8 @@ pub struct ActorState {
 #### Actor deployment
 
 The current `InitActor` (`f00`) will be extended with a (`InstallActor`) method
-taking a single input parameter: the actor's WASM bytecode. As mentioned above,
-DAG representation format is to be defined. The actor's WASM bytecode must
+taking a single input parameter: the actor's Wasm bytecode. As mentioned above,
+DAG representation format is to be defined. The actor's Wasm bytecode must
 specify the version of the Invocation Container the bytecode requires, inside a
 reserved exported global.
 
@@ -451,7 +452,7 @@ struct ActorSpec {
 
 The logic of `InitActor#LoadActor` is as follows.
 
-1. Validate the WASM bytecode.
+1. Validate the Wasm bytecode.
     - Perform syntax validation and structural validation, [as per standard](https://webassembly.github.io/spec/core/valid/index.html).
     - No floating point instructions.
 2. Multihash the bytecode and calculate the code CID.
@@ -479,7 +480,7 @@ on recipient actor type and method number to dispatch to the appropriate
 handler. This approach is **external method dispatch**.
 
 With the FVM, actors now expose a **single entrypoint** in the form of a
-WASM-exported function, and conduct **internal method dispatch**.
+Wasm-exported function, and conduct **internal method dispatch**.
 
 The signature of an actor entrypoint is:
 
@@ -886,8 +887,8 @@ operating on ADLs may be non-negligible.
 
 IPLD blocks are dynamically-sized blobs of data. When loading a block by CID,
 the size is unknown, so the actor cannot allocate memory upfront. Moreover,
-host-side memory is inaccessible to WASM code, so it's not possible for the
-Kernel to return a pointer to host-side memory for WASM code to read.
+host-side memory is inaccessible to Wasm code, so it's not possible for the
+Kernel to return a pointer to host-side memory for Wasm code to read.
 
 For this reason, the low-level IPLD syscall API revolves around the concept of
 "block handles". Block handles are references to blocks, inspired by Unix file
@@ -895,7 +896,7 @@ descriptors, and identified by a block ID (`u32`).
 
 Parameters to actors and return data returned from actor calls are modelled as
 IPLD blocks too. But since they are not referenced from state or elsewhere, they
-aren't referenced by CID but merely by block IDs when invoking the WASM actor
+aren't referenced by CID but merely by block IDs when invoking the Wasm actor
 entrypoint (see [Actor message dispatch](#actor-message-dispatch)).
 
 **Syscall mechanics**
@@ -903,7 +904,7 @@ entrypoint (see [Actor message dispatch](#actor-message-dispatch)).
 - When accessing a block by CID through `ipld::open`, the Kernel returns a block
   ID, the size, and the codec.
 - To read the block data, `ipld::read` takes a block ID and a pointer to a
-  WASM-side buffer.
+  Wasm-side buffer.
 - To write a block, `ipld::create` takes a buffer and a codec, and returns a
   block ID.
 - If the Wasm actor needs to compute the CID for a block, it calls the
@@ -913,10 +914,10 @@ entrypoint (see [Actor message dispatch](#actor-message-dispatch)).
 
 ### Module caching
 
-WASM execution performance is a determining factor in the ability to maintain
+Wasm execution performance is a determining factor in the ability to maintain
 blockchain epoch time (30 seconds).
 
-We recommend implementations to compile WASM bytecode into machine code for
+We recommend implementations to compile Wasm bytecode into machine code for
 faster execution, instead of relying on interpretation. This incurs in an
 upfront CPU-bound compilation cost, in exchange for ongoing operating costs.
 
@@ -925,11 +926,7 @@ approaches may introduce vulnerabilities. Instead, we may factor in the
 compilation compute cost and the perpetual storage cost, as deployment-time gas.
 
 Any approach will need to account for eventual recompilation costs on events
-like WASM Engine or compiler upgrades.
-
-As far as the network upgrade being proposed in this FIP is concerned, we
-recommend implementations to warm up the module cache for all built-in actors
-during node initialization.
+like Wasm Engine or compiler upgrades.
 
 ### Gas charging
 
@@ -958,16 +955,10 @@ exists between the VM and specific actor types will be carried over. Concretely:
 - Burnt funds account and Reserve account: balances are queried when handling
   the `network::total_fil_circ_supply` syscall.
 
-## Foundational FVM network upgrade
-
-> WIP
-
 ## Design Rationale
 
-> WIP
-
 Concerning the choice of runtime, various technologies were evaluated, including
-EVM, JavaScript/SES, LLVM IR, etc. WASM was chosen for these reasons:
+EVM, JavaScript/SES, LLVM IR, etc. Wasm was chosen for these reasons:
 
 - It has a strong and promising future in the blockchain space; with room for
   cross-chain collaborations and interest groups
@@ -986,37 +977,31 @@ EVM, JavaScript/SES, LLVM IR, etc. WASM was chosen for these reasons:
 
 ## Backwards Compatibility
 
-> WIP
+Existing built-in actor and system functionality will not be affected by the
+introduction of the Filecoin Virtual Machine.
 
 ## Test Cases
 
-> WIP
-
-> https://github.com/filecoin-project/fvm-test-vectors
+FVM implementations can subject themselves to the FVM-specific test vectors
+hosted at: https://github.com/filecoin-project/fvm-test-vectors.
 
 ## Security Considerations
 
-> WIP
-
-> TBD. Those resulting from a 100% switch of something so low-level as the
-> execution layer of the blockchain.
+This specification entails a complete rearchitecture of the execution layer of
+the Filecoin blockchain, and the transition to adopting a new actors codebase.
+Such low-level and deep changes comes with non-negligible risks, the extent of
+which will be analyzed as network upgrades with concrete scopes are proposed.
 
 ## Incentive Considerations
 
-> WIP
-
-> Explain that this FIP does not affect incentives in itself, but anticipate the
-> introduction of indirect incentive changes in future FIPs, related to gas and
-> the ability of FVM use cases to alter the cryptoeconomy.
+This specification FIP does not affect incentives in itself. However, the
+ability to deploy arbitrary on-chain programs may impact chain utilization, gas
+expenditures and burn, and the flow of tokens as a result of the use cases that
+developers deploy on top of the FVM.
 
 ## Product Considerations
 
-> WIP
-
-> The Foundational FVM does not introduce user-facing product considerations
-> (future FIPs will). However, it does introduce changes in how implementors
-> will implement changes on built-in actors going forward (for the better).
-> Explain the change in dynamics.
+> TBD.
 
 ## Implementation
 
@@ -1032,11 +1017,11 @@ Copyright and related rights waived via [CC0](https://creativecommons.org/public
 [reference SDK]: https://github.com/filecoin-project/ref-fvm/tree/master/sdk
 [SputnikVM]: https://github.com/rust-blockchain/evm
 [blueallow/revm]: https://github.com/bluealloy/revm
-[WebAssembly (WASM)]: https://webassembly.org/
+[WebAssembly (Wasm)]: https://webassembly.org/
 [multi-value support]: https://github.com/WebAssembly/spec/blob/master/proposals/multi-value/Overview.md
 [SIMD instructions]: https://github.com/WebAssembly/simd/blob/master/proposals/simd/SIMD.md
 [threads]: https://github.com/WebAssembly/threads
-[Nondeterministic]: https://github.com/WebAssembly/design/blob/main/Nondeterminism.md
+[Nondeterminism]: https://github.com/WebAssembly/design/blob/main/Nondeterminism.md
 [actor model]: https://en.wikipedia.org/wiki/Actor_model
 [EVM <> FVM binding specification]: https://github.com/filecoin-project/fvm-project/blob/main/04-evm-mapping.md
 [FVM Error Conditions]: https://github.com/filecoin-project/fvm-specs/blob/main/07-errors.md
