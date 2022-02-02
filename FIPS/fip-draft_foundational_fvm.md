@@ -224,18 +224,17 @@ implementations may opt to deviate from it.
 
 ### Technology
 
-The proposed FVM execution runtime is [WebAssembly (WASM)].
+The proposed FVM execution runtime is [WebAssembly (WASM)] with 32-bit memories.
+64-bit memories are still under development in the [memory64] extension.
 
-The chosen WASM architecture is variant is 32-bits, and not 64-bit. Reasons include:
-
-- Widespread support
-- Lower memory footprint
-- 4GiB addressable memory not deemed limiting for blockchain use cases
-- No loss of function: 64-bit integer types and operations are supported
+WASM with 32-bit memories supports 64-bit integer types and arithmetic, it just
+can't address memory beyond 4GiB. This size is deemed sufficient for blockchain
+state transition use cases, but may be limiting for future and more generalised
+applications of the FVM.
 
 The FVM requires [multi-value support]. It currently forbids [SIMD
 instructions], floating number values and operations, and [threads] to prevent
-[Nondeterministic] behavior. However, these requirements may vary in the future.
+[Nondeterministic] behavior. However, these constraints may vary in the future.
 
 ### Responsibilities
 
@@ -522,10 +521,10 @@ namespaces imported by the module.
   length". Together, they define the bounds of a slice of memory.
 - Syscall arguments prefixed with `o_` represent output parameters.
 - The `Result` return type carries a **syscall error number** and the specified
-  payload type. The latter only appears when the syscall succeeded (with error
-  number `0`).  These error numbers are ephemeral, and have no meaning beyond
-  the FVM syscall boundary. Refer to the [FVM Error Conditions] document for
-  more info.
+  payload type. The latter only appears when the syscall succeeded (implied by
+  error number `0`). These error numbers are ephemeral, and have no meaning
+  beyond the FVM syscall boundary. Refer to the [FVM Error Conditions] document
+  for more info.
 
 #### Namespace: `actor`
 
@@ -855,16 +854,6 @@ sequential state IO operations, each of which traverses the Extern boundary in a
 non-parallelizable way. If the Extern is traversed through FFI, the cost of
 operating on ADLs may be non-negligible.
 
-### Memory policy
-
-The Invocation Container makes available a maximum of 1024 pages to the actor.
-Given that WASM memory pages are a fixed 64KiB size, this results in every actor
-call being limited to 64MiB of memory.
-
-Depending on the WASM engine, it may be possible to size memory dynamically. If
-that's the case, a policy that grows memory dynamically from a low value (even
-zero) should be preferred.
-
 ### Module caching
 
 WASM execution performance is a determining factor in the ability to maintain
@@ -998,3 +987,4 @@ Copyright and related rights waived via [CC0](https://creativecommons.org/public
 [specs-actors]: https://github.com/filecoin-project/specs-actors
 [existing non-programmable VM]: https://spec.filecoin.io/intro/filecoin_vm/
 [FVM built-in actors]: https://github.com/filecoin-project/ref-fvm/tree/master/actors
+[memory64]: https://github.com/WebAssembly/memory64/blob/main/proposals/memory64/Overview.md
