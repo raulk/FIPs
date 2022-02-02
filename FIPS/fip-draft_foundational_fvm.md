@@ -492,6 +492,8 @@ pub fn invoke(params_block_id: u32) -> u32 { }
 - The single uint32 return value corresponds to the block ID of the return data
   struct, or `0` for none.
 
+More information on block IDs can be found in [IPLD memory model](#ipld-memory-model)
+
 This design decouples actors from their runtime, and is more aligned with the
 actor model, where actors interact through inboxes. It also awards maximal
 degrees of freedom and sophistication to support techniques such as structural
@@ -840,9 +842,9 @@ receives an input IPLD graph, performs computation, and returns a new IPLD graph
 (which is persisted by saving the root CID of the new graph in the actor's
 state).
 
-All state will be stored and retrieved as IPLD. The state store lives on the
-node side, and it is exposed to the FVM via an Extern. This is important as the
-VM itself needs to understand the IPLD so we can do garbage collection, etc.
+All state is stored and retrieved as IPLD. The state store lives on the node
+side, and it is exposed to the FVM via an Extern. This is important as the VM
+itself needs to understand the IPLD so we can do garbage collection, etc.
 
 The FVM must guarantee that actors can only access data that is in their state
 tree. This is done through the maintenance of an "accessible set" inside the
@@ -853,6 +855,35 @@ and mutating entries in objects like HAMTs and AMT results in multiple
 sequential state IO operations, each of which traverses the Extern boundary in a
 non-parallelizable way. If the Extern is traversed through FFI, the cost of
 operating on ADLs may be non-negligible.
+
+**Block handles**
+
+IPLD blocks are dynamically-sized blobs of data. When loading a block by CID,
+the size is unknown, so the actor cannot allocate memory upfront. Moreover,
+host-side memory is inaccessible to WASM code, so it's not possible for the
+Kernel to return a pointer to host-side memory for WASM code to read.
+
+For this reason, the low-level IPLD syscall API revolves around the concept of
+"block handles". Block handles are references to blocks, inspired by Unix file
+descriptors, and identified by a block ID (`u32`).
+
+Parameters to actors and return data returned from actor calls are modelled as
+IPLD blocks too. But since they are not referenced from state or elsewhere, they
+aren't referenced by CID but merely by block IDs when invoking the WASM actor
+entrypoint (see [Actor message dispatch](#actor-message-dispatch)).
+
+**Syscall mechanics**
+
+- When accessing a block by CID through `ipld::open`, the Kernel returns a block
+  ID, the size, and the codec.
+- To read the block data, `ipld::read` takes a block ID and a pointer to a
+  WASM-side buffer.
+- To write a block, `ipld::create` takes a buffer and a codec, and returns a
+  block ID.
+- If the Wasm actor needs to compute the CID for a block, it calls the
+  `ipld::cid` syscall passing in the block ID.
+- An `ipld::stat` syscall is available to enquire the size and codec of the
+  block by ID. This is useful to allocate a buffer for call parameters.
 
 ### Module caching
 
